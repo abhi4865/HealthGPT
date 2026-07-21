@@ -466,6 +466,26 @@ body {
   background: rgba(255,255,255,0.25);
 }
 
+/* Light-contrast ghost variant — for use on white/light card backgrounds
+   (the dark sidebar .btn-ghost is invisible there: white-on-white). */
+.btn-soft {
+  background: var(--purple-soft);
+  color: var(--purple-deep);
+  border-color: var(--purple-light);
+}
+.btn-soft:hover {
+  background: var(--purple-light);
+  color: var(--purple-deep);
+}
+
+/* Make native date/time picker icons visible on the light login-input bg */
+.login-input[type="date"]::-webkit-calendar-picker-indicator,
+.login-input[type="time"]::-webkit-calendar-picker-indicator {
+  opacity: 0.65;
+  cursor: pointer;
+  filter: invert(28%) sepia(75%) saturate(1500%) hue-rotate(255deg);
+}
+
 .btn-danger {
   background: #FEE2E2;
   color: #991B1B;

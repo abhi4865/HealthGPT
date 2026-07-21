@@ -1052,8 +1052,8 @@ function Reminder() {
                     <div style={{ fontSize: 12, color: "#6B7280" }}>{formatWhen(r)}</div>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button className="btn btn-ghost btn-sm" onClick={() => snooze(r.id, 10)}>😴 Snooze 10m</button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => togglePause(r.id)}>
+                    <button className="btn btn-soft btn-sm" onClick={() => snooze(r.id, 10)}>😴 Snooze 10m</button>
+                    <button className="btn btn-soft btn-sm" onClick={() => togglePause(r.id)}>
                       {r.paused ? "▶️ Resume" : "⏸ Pause"}
                     </button>
                     <button className="btn btn-outline-purple btn-sm" onClick={() => startEdit(r)}>✏️ Edit</button>
@@ -1084,7 +1084,7 @@ function Reminder() {
                   >
                     <div>{r.text}</div>
                     <button
-                      className="btn btn-ghost btn-sm"
+                      className="btn btn-soft btn-sm"
                       style={{ textDecoration: "none" }}
                       onClick={() => removeReminder(r.id)}
                     >
