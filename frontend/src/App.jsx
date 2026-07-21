@@ -738,74 +738,362 @@ function ManageAdminProfile({ adminProfile, setAdminProfile, onBack, toast, onLo
 }
 
 // ─── Reminder ─────────────────────────────────────────────────────────────────
-// Simple local reminder list (kept in React state — no backend wired yet).
-function Reminder() {
-  const [reminders, setReminders] = useState([]);
-  const [text, setText] = useState("");
-  const [date, setDate] = useState("");
+const REMINDER_STORAGE_KEY = "ashaplus_reminders_v1";
 
-  const addReminder = (e) => {
-    e.preventDefault();
-    if (!text.trim()) return;
-    setReminders((prev) => [
-      { id: Date.now(), text: text.trim(), date },
-      ...prev,
-    ]);
-    setText("");
-    setDate("");
+function loadReminders() {
+  try {
+    const raw = localStorage.getItem(REMINDER_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveReminders(list) {
+  try {
+    localStorage.setItem(REMINDER_STORAGE_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+function computeNextFire(r) {
+  if (r.mode === "once") {
+    if (!r.date || !r.time) return null;
+    const t = new Date(`${r.date}T${r.time}:00`).getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  const intervalMs = ((Number(r.everyHrs) || 0) * 60 + (Number(r.everyMin) || 0)) * 60 * 1000;
+  if (!intervalMs) return null;
+  const base = r.lastFired || r.createdAt || Date.now();
+  return base + intervalMs;
+}
+
+function formatWhen(r) {
+  if (r.mode === "once") {
+    if (!r.date) return "No date set";
+    const d = new Date(`${r.date}T${r.time || "00:00"}:00`);
+    return d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  }
+  const h = Number(r.everyHrs) || 0;
+  const m = Number(r.everyMin) || 0;
+  const parts = [];
+  if (h) parts.push(`${h} hr${h !== 1 ? "s" : ""}`);
+  if (m) parts.push(`${m} min`);
+  return `Every ${parts.join(" ") || "—"}`;
+}
+
+function Reminder() {
+  const [reminders, setReminders] = useState(loadReminders);
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
+
+  const emptyForm = { text: "", mode: "once", date: "", time: "", everyHrs: "", everyMin: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+
+  useEffect(() => saveReminders(reminders), [reminders]);
+
+  const requestPermission = () => {
+    if (typeof Notification === "undefined") return;
+    Notification.requestPermission().then(setNotifPermission);
   };
 
-  const removeReminder = (id) =>
+  const fireNotification = (r) => {
+    const title = "⏰ ASHA+ Reminder";
+    const body = r.text;
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) {
+          navigator.serviceWorker.getRegistration().then((reg) => {
+            if (reg) {
+              reg.showNotification(title, { body, icon: "/favicon.ico", tag: `reminder-${r.id}`, requireInteraction: true });
+            } else {
+              new Notification(title, { body, icon: "/favicon.ico" });
+            }
+          }).catch(() => new Notification(title, { body, icon: "/favicon.ico" }));
+        } else {
+          new Notification(title, { body, icon: "/favicon.ico" });
+        }
+      } catch {
+        window.alert(`${title}\n${body}`);
+      }
+    } else {
+      window.alert(`${title}\n${body}`);
+    }
+  };
+
+  useEffect(() => {
+    const tick = () => {
+      const now = Date.now();
+      setReminders((prev) => {
+        let changed = false;
+        const next = prev.map((r) => {
+          if (r.done || r.paused) return r;
+          const fireAt = computeNextFire(r);
+          if (fireAt !== null && fireAt <= now) {
+            fireNotification(r);
+            changed = true;
+            if (r.mode === "once") {
+              return { ...r, done: true, lastFired: now };
+            }
+            return { ...r, lastFired: now };
+          }
+          return r;
+        });
+        return changed ? next : prev;
+      });
+    };
+    const id = setInterval(tick, 15000);
+    tick();
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resetForm = () => {
+    setForm(emptyForm);
+    setEditingId(null);
+  };
+
+  const submitForm = (e) => {
+    e.preventDefault();
+    if (!form.text.trim()) return;
+    if (form.mode === "once" && (!form.date || !form.time)) {
+      window.alert("Please pick both a date and a time for a one-time reminder.");
+      return;
+    }
+    if (form.mode === "interval" && !(Number(form.everyHrs) || Number(form.everyMin))) {
+      window.alert("Please set hours and/or minutes for a recurring reminder.");
+      return;
+    }
+
+    if (editingId) {
+      setReminders((prev) =>
+        prev.map((r) =>
+          r.id === editingId ? { ...r, ...form, done: false, lastFired: null } : r
+        )
+      );
+    } else {
+      setReminders((prev) => [
+        { id: Date.now(), ...form, createdAt: Date.now(), lastFired: null, done: false, paused: false },
+        ...prev,
+      ]);
+    }
+    resetForm();
+  };
+
+  const startEdit = (r) => {
+    setEditingId(r.id);
+    setForm({
+      text: r.text, mode: r.mode, date: r.date || "", time: r.time || "",
+      everyHrs: r.everyHrs || "", everyMin: r.everyMin || "",
+    });
+  };
+
+  const removeReminder = (id) => {
+    if (editingId === id) resetForm();
     setReminders((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const togglePause = (id) =>
+    setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, paused: !r.paused } : r)));
+
+  const snooze = (id, minutes) =>
+    setReminders((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? r.mode === "once"
+            ? {
+                ...r,
+                date: new Date(Date.now() + minutes * 60000).toISOString().slice(0, 10),
+                time: new Date(Date.now() + minutes * 60000).toTimeString().slice(0, 5),
+                done: false,
+              }
+            : {
+                ...r,
+                lastFired:
+                  Date.now() -
+                  (((Number(r.everyHrs) || 0) * 60 + (Number(r.everyMin) || 0)) * 60000) +
+                  minutes * 60000,
+              }
+          : r
+      )
+    );
+
+  const markDone = (id) =>
+    setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, done: true } : r)));
+
+  const active = reminders.filter((r) => !r.done);
+  const done = reminders.filter((r) => r.done);
 
   return (
     <div className="page-body">
+      {notifPermission !== "granted" && notifPermission !== "unsupported" && (
+        <div className="card card-ai" style={{ marginBottom: 16, borderColor: "#F59E0B" }}>
+          <div className="card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ fontSize: 14 }}>
+              🔔 Turn on notifications so reminders can alert you here — on this laptop or on your phone's
+              browser — even if the ASHA+ tab is in the background. (Your browser must have the tab open;
+              fully closed-app push isn't wired up yet.)
+            </div>
+            <button className="btn btn-gold btn-sm" onClick={requestPermission}>Enable Notifications</button>
+          </div>
+        </div>
+      )}
+
       <div className="card card-ai">
         <div className="card-header">
           <div className="card-title">⏰ Reminders</div>
+          <span className="badge badge-purple">{active.length} active</span>
         </div>
         <div className="card-body">
-          <form onSubmit={addReminder} style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
+          <form onSubmit={submitForm} style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 24 }}>
             <input
               className="login-input"
-              style={{ flex: "2 1 240px" }}
               type="text"
-              placeholder="What do you want to be reminded about?"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
+              placeholder="What do you want to be reminded about? (e.g. Take BP medicine)"
+              value={form.text}
+              onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))}
             />
-            <input
-              className="login-input"
-              style={{ flex: "1 1 160px" }}
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-            <button type="submit" className="btn btn-outline-purple">➕ Add Reminder</button>
+
+            <div className="btn-tabs btn-tabs-compact" style={{ width: "fit-content" }}>
+              <button
+                type="button"
+                className={`btn-tab ${form.mode === "once" ? "active" : ""}`}
+                onClick={() => setForm((f) => ({ ...f, mode: "once" }))}
+              >
+                📅 One-time (date &amp; time)
+              </button>
+              <button
+                type="button"
+                className={`btn-tab ${form.mode === "interval" ? "active" : ""}`}
+                onClick={() => setForm((f) => ({ ...f, mode: "interval" }))}
+              >
+                🔁 Repeat every N hrs/min
+              </button>
+            </div>
+
+            {form.mode === "once" ? (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <input
+                  className="login-input"
+                  style={{ flex: "1 1 180px" }}
+                  type="date"
+                  value={form.date}
+                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                />
+                <input
+                  className="login-input"
+                  style={{ flex: "1 1 140px" }}
+                  type="time"
+                  value={form.time}
+                  onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
+                />
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <label style={{ fontSize: 13, color: "#6B7280", display: "flex", alignItems: "center", gap: 6 }}>
+                  Every
+                  <input
+                    className="login-input"
+                    style={{ width: 90 }}
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                    value={form.everyHrs}
+                    onChange={(e) => setForm((f) => ({ ...f, everyHrs: e.target.value }))}
+                  />
+                  hrs
+                </label>
+                <label style={{ fontSize: 13, color: "#6B7280", display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    className="login-input"
+                    style={{ width: 90 }}
+                    type="number"
+                    min="0"
+                    max="59"
+                    placeholder="0"
+                    value={form.everyMin}
+                    onChange={(e) => setForm((f) => ({ ...f, everyMin: e.target.value }))}
+                  />
+                  min
+                </label>
+                <span style={{ fontSize: 12, color: "#6B7280" }}>e.g. every 8 hrs for a pill schedule</span>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="submit" className="btn btn-outline-purple">
+                {editingId ? "💾 Save Changes" : "➕ Add Reminder"}
+              </button>
+              {editingId && (
+                <button type="button" className="btn btn-ghost" onClick={resetForm}>Cancel</button>
+              )}
+            </div>
           </form>
 
-          {reminders.length === 0 ? (
-            <div style={{ color: "#6B7280", fontSize: 14 }}>No reminders yet.</div>
+          {active.length === 0 ? (
+            <div style={{ color: "#6B7280", fontSize: 14 }}>No active reminders. Add one above.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {reminders.map((r) => (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: done.length ? 24 : 0 }}>
+              {active.map((r) => (
                 <div
                   key={r.id}
                   style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "10px 14px", border: "1px solid var(--border, #e5e4e7)", borderRadius: 8,
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                    padding: "12px 16px", border: "1px solid var(--border, #e5e4e7)", borderRadius: 10,
+                    opacity: r.paused ? 0.55 : 1, flexWrap: "wrap",
                   }}
                 >
                   <div>
-                    <div style={{ fontWeight: 600 }}>{r.text}</div>
-                    {r.date && <div style={{ fontSize: 12, color: "#6B7280" }}>{r.date}</div>}
+                    <div style={{ fontWeight: 600 }}>
+                      {r.text} {r.paused && <span className="badge badge-red" style={{ marginLeft: 6 }}>Paused</span>}
+                      {r.mode === "interval" && <span className="badge badge-blue" style={{ marginLeft: 6 }}>Recurring</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#6B7280" }}>{formatWhen(r)}</div>
                   </div>
-                  <button className="btn btn-outline-purple btn-sm" onClick={() => removeReminder(r.id)}>
-                    Remove
-                  </button>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => snooze(r.id, 10)}>😴 Snooze 10m</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => togglePause(r.id)}>
+                      {r.paused ? "▶️ Resume" : "⏸ Pause"}
+                    </button>
+                    <button className="btn btn-outline-purple btn-sm" onClick={() => startEdit(r)}>✏️ Edit</button>
+                    {r.mode === "once" && (
+                      <button className="btn btn-outline-purple btn-sm" onClick={() => markDone(r.id)}>✔️ Done</button>
+                    )}
+                    <button className="btn btn-danger btn-sm" onClick={() => removeReminder(r.id)}>🗑 Delete</button>
+                  </div>
                 </div>
               ))}
             </div>
+          )}
+
+          {done.length > 0 && (
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: 13, color: "#6B7280", marginBottom: 10 }}>
+                Completed ({done.length})
+              </summary>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {done.map((r) => (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "10px 14px", border: "1px solid var(--border, #e5e4e7)", borderRadius: 8,
+                      opacity: 0.6, textDecoration: "line-through",
+                    }}
+                  >
+                    <div>{r.text}</div>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ textDecoration: "none" }}
+                      onClick={() => removeReminder(r.id)}
+                    >
+                      🗑 Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </details>
           )}
         </div>
       </div>
