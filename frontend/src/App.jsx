@@ -2,6 +2,8 @@ import { useState, useEffect, createContext, useContext, useRef } from "react";
 import { createPortal } from "react-dom";
 import html2pdf from "html2pdf.js";
 import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
 } from "firebase/auth";
@@ -23,11 +25,12 @@ import {
   createUser,
   deleteAuthUser,
   updateAshaWorker,
+  selfRegisterPatient,
 } from "./api";
-// Note: self-registration (selfRegisterPatient) and direct patient
-// add/edit/delete (addPatient/updatePatient/deletePatient/adminCreatePatient)
-// are disabled while the app runs on the single demo account — see
-// AuthPage below. Re-import from "./api" if those pages come back.
+// Note: direct patient add/edit/delete (addPatient/updatePatient/
+// deletePatient/adminCreatePatient) stay disabled since the Dashboard/
+// Patients pages were removed. Registration below creates a real Firebase
+// Auth account + patient record via selfRegisterPatient.
 import "./App.css";
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
@@ -92,12 +95,16 @@ function useToast() {
 }
 
 // ─── Auth Page ────────────────────────────────────────────────────────────────
-// Simplified single-account login (no role select, no self-registration).
-// Demo credentials: test@gmail.com / @test1234
+// Demo shortcut: test@gmail.com / @test1234 logs straight in with no Firebase
+// round trip. Any other email/password goes through real Firebase Auth —
+// and Register creates a real Firebase Auth account + patient record.
 const DEMO_EMAIL    = "test@gmail.com";
 const DEMO_PASSWORD = "@test1234";
 
-function AuthPage({ onLogin }) {
+function AuthPage({ onLogin, onLoginStart, onLoginEnd }) {
+  const [mode, setMode] = useState("login"); // "login" | "register"
+
+  // Shared
   const [email, setEmail]     = useState("");
   const [password, setPass]   = useState("");
   const [loading, setLoading] = useState(false);
@@ -105,27 +112,77 @@ function AuthPage({ onLogin }) {
   const [showPass, setShowP]  = useState(false);
   const [showForgotMsg, setShowForgotMsg] = useState(false);
 
-  const handleSubmit = (e) => {
+  // Register-only
+  const [name, setName]           = useState("");
+  const [confirmPass, setConfirm] = useState("");
+
+  const resetFields = () => {
+    setError(""); setPass(""); setConfirm(""); setShowForgotMsg(false);
+  };
+
+  const switchMode = (next) => { setMode(next); resetFields(); };
+
+  // ── Login ──────────────────────────────────────────────────────────────────
+  const handleLogin = async (e) => {
     e?.preventDefault();
     setError("");
-    setLoading(true);
 
-    // Demo/local auth check — no Firebase round trip needed for the single
-    // fixed account. Swap this back to signInWithEmailAndPassword() once
-    // real accounts are wired up again.
-    setTimeout(() => {
-      if (email.trim() === DEMO_EMAIL && password === DEMO_PASSWORD) {
-        onLogin({
-          name:  "Test User",
-          email: DEMO_EMAIL,
-          role:  "admin",
-        });
-      } else {
-        setError("Incorrect email or password.");
-      }
+    // Demo/local shortcut — instant, no Firebase round trip.
+    if (email.trim() === DEMO_EMAIL && password === DEMO_PASSWORD) {
+      setLoading(true);
+      setTimeout(() => {
+        onLogin({ name: "Test User", email: DEMO_EMAIL, role: "admin" });
+        setLoading(false);
+      }, 300);
+      return;
+    }
+
+    setLoading(true);
+    onLoginStart?.();
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+      await cred.user.getIdToken(true); // refresh so role claim is present
+      const snap = await getDoc(doc(db, "users", cred.user.uid));
+      if (!snap.exists()) throw new Error("No profile found for this account.");
+      onLogin(snap.data());
+    } catch (err) {
+      setError(err.message?.replace(/^Firebase:\s*/, "") || "Login failed.");
+    } finally {
       setLoading(false);
-    }, 400);
+      onLoginEnd?.();
+    }
   };
+
+  // ── Register (self-service patient signup) ──────────────────────────────────
+  const handleRegister = async (e) => {
+    e?.preventDefault();
+    setError("");
+
+    if (!name.trim())            return setError("Please enter your full name.");
+    if (password.length < 6)     return setError("Password must be at least 6 characters.");
+    if (password !== confirmPass) return setError("Passwords do not match.");
+
+    setLoading(true);
+    onLoginStart?.();
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const idToken = await cred.user.getIdToken();
+      await selfRegisterPatient(idToken, { name: name.trim(), email: email.trim() });
+      const snap = await getDoc(doc(db, "users", cred.user.uid));
+      onLogin(
+        snap.exists()
+          ? snap.data()
+          : { name: name.trim(), email: email.trim(), role: "patient" }
+      );
+    } catch (err) {
+      setError(err.message?.replace(/^Firebase:\s*/, "") || "Registration failed.");
+    } finally {
+      setLoading(false);
+      onLoginEnd?.();
+    }
+  };
+
+  const isRegister = mode === "register";
 
   return (
     <div className="login-page login-page-centered">
@@ -137,9 +194,31 @@ function AuthPage({ onLogin }) {
             <div className="login-brand-title">HealthGPT</div>
           </div>
 
-          <div className="login-subtitle">Login with your email and password</div>
+          <div className="login-subtitle">
+            {isRegister ? (
+              <span className="login-link" style={{ textDecoration: "underline" }}>
+                Create a new account
+              </span>
+            ) : (
+              "Login with your email and password"
+            )}
+          </div>
 
-          <form onSubmit={handleSubmit} style={{ width: "100%" }}>
+          <form onSubmit={isRegister ? handleRegister : handleLogin} style={{ width: "100%" }}>
+            {/* Full Name — register only */}
+            {isRegister && (
+              <div className="login-field">
+                <input
+                  className="login-input"
+                  type="text"
+                  placeholder="Full Name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+
             {/* Email */}
             <div className="login-field">
               <input
@@ -176,17 +255,30 @@ function AuthPage({ onLogin }) {
               </button>
             </div>
 
-            {/* Forgot password */}
-            <div style={{ textAlign: "right", marginBottom: showForgotMsg ? 10 : 20 }}>
-              <span
-                className="login-link"
-                onClick={() => setShowForgotMsg((p) => !p)}
-              >
-                Forgot Password?
-              </span>
-            </div>
+            {/* Confirm Password — register only */}
+            {isRegister && (
+              <div className="login-field">
+                <input
+                  className="login-input"
+                  type={showPass ? "text" : "password"}
+                  placeholder="Confirm Password"
+                  value={confirmPass}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  required
+                />
+              </div>
+            )}
 
-            {showForgotMsg && (
+            {/* Forgot password — login only */}
+            {!isRegister && (
+              <div style={{ textAlign: "right", marginBottom: showForgotMsg ? 10 : 20 }}>
+                <span className="login-link" onClick={() => setShowForgotMsg((p) => !p)}>
+                  Forgot Password?
+                </span>
+              </div>
+            )}
+
+            {!isRegister && showForgotMsg && (
               <div className="login-demo-creds" style={{ marginBottom: 20 }}>
                 Password reset isn't available in this build. Use the demo
                 account: {DEMO_EMAIL} / {DEMO_PASSWORD}
@@ -194,20 +286,33 @@ function AuthPage({ onLogin }) {
             )}
 
             {/* Error */}
-            {error && (
-              <div className="login-error">{error}</div>
-            )}
+            {error && <div className="login-error">{error}</div>}
 
-            {/* Login button */}
-            <button
-              type="submit"
-              className="login-btn"
-              disabled={loading}
-            >
+            {/* Submit button */}
+            <button type="submit" className="login-btn" disabled={loading} style={isRegister ? { marginTop: 8 } : undefined}>
               {loading ? <span className="spinner" style={{ borderTopColor: "#fff", borderColor: "rgba(255,255,255,0.3)" }} /> : null}
-              {loading ? "Signing in…" : "Login"}
+              {loading ? (isRegister ? "Creating account…" : "Signing in…") : (isRegister ? "Register" : "Login")}
             </button>
           </form>
+
+          {/* Switch mode */}
+          <div style={{ marginTop: 18, fontSize: 14 }}>
+            {isRegister ? (
+              <>
+                Already have an account?{" "}
+                <span className="login-link" style={{ fontWeight: 700, textDecoration: "underline" }} onClick={() => switchMode("login")}>
+                  Login
+                </span>
+              </>
+            ) : (
+              <>
+                Don't have an account?{" "}
+                <span className="login-link" style={{ fontWeight: 700, textDecoration: "underline" }} onClick={() => switchMode("register")}>
+                  Register
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -4112,7 +4217,11 @@ export default function App() {
   // ── Auth gate ───────────────────────────────────────────────────────────────
   if (!user) return (
     <>
-      <AuthPage onLogin={login} />
+      <AuthPage
+        onLogin={login}
+        onLoginStart={() => { isManualLoginRef.current = true; }}
+        onLoginEnd={()  => { isManualLoginRef.current = false; }}
+      />
       <Toast toasts={toasts} dismiss={dismiss} />
     </>
   );
