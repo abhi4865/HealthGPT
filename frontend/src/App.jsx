@@ -4797,7 +4797,7 @@ export default function App() {
       if (page === "chatbot")  return <ChatBot />;
       if (page === "medical")  return <MedicalAnalysis />;
       if (page === "schemes")  return (
-        <GovtSchemes schemes={schemes} setSchemes={setSchemes} isAdmin toast={toast} />
+        <GovtSchemes schemes={schemes} setSchemes={setSchemes} isAdmin={user.role === "super_admin"} toast={toast} />
       );
     } else {
       // Patient role
