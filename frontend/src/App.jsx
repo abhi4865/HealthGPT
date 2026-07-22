@@ -24,18 +24,32 @@ import {
   analyzeMedicalDocument,
   createUser,
   deleteAuthUser,
-  updateAshaWorker,
-  selfRegisterPatient,
+  selfRegisterUser,
+  addReminder as apiAddReminder,
+  updateReminder as apiUpdateReminder,
+  deleteReminder as apiDeleteReminder,
+  addCalendarNote as apiAddCalendarNote,
+  updateCalendarNote as apiUpdateCalendarNote,
+  deleteCalendarNote as apiDeleteCalendarNote,
 } from "./api";
-// Note: direct patient add/edit/delete (addPatient/updatePatient/
-// deletePatient/adminCreatePatient) stay disabled since the Dashboard/
-// Patients pages were removed. Registration below creates a real Firebase
-// Auth account + patient record via selfRegisterPatient.
+// Note: Reminders and Calendar Notes now live in Firestore (collections
+// "reminders" and "calendar_notes"), scoped per signed-in user. Reads are
+// real-time via onSnapshot below; writes go through the backend so
+// ownership is verified server-side.
 import "./App.css";
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
 const AuthContext = createContext(null);
 const useAuth = () => useContext(AuthContext);
+
+// NOTE: This app only has "super_admin" and "user" roles — the old "asha"
+// role/route no longer exists on the backend. ManageAsha below is legacy UI
+// left over from ASHA+; it's unreachable from the sidebar in this role model.
+// This stub just keeps the file compiling if ManageAsha is ever rendered —
+// remove ManageAsha entirely once you've confirmed you don't need it.
+async function updateAshaWorker() {
+  throw new Error("ASHA worker management isn't available in this app.");
+}
 
 // ─── Security / Password Config (still used by Manage Admin Profile UI) ─────
 const SECURITY_QUESTIONS = [
@@ -167,12 +181,12 @@ function AuthPage({ onLogin, onLoginStart, onLoginEnd }) {
     try {
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const idToken = await cred.user.getIdToken();
-      await selfRegisterPatient(idToken, { name: name.trim(), email: email.trim() });
+      await selfRegisterUser(idToken, { name: name.trim(), email: email.trim() });
       const snap = await getDoc(doc(db, "users", cred.user.uid));
       onLogin(
         snap.exists()
           ? snap.data()
-          : { name: name.trim(), email: email.trim(), role: "patient" }
+          : { name: name.trim(), email: email.trim(), role: "user" }
       );
     } catch (err) {
       setError(err.message?.replace(/^Firebase:\s*/, "") || "Registration failed.");
@@ -739,23 +753,6 @@ function ManageAdminProfile({ adminProfile, setAdminProfile, onBack, toast, onLo
 }
 
 // ─── Reminder ─────────────────────────────────────────────────────────────────
-const REMINDER_STORAGE_KEY = "ashaplus_reminders_v1";
-
-function loadReminders() {
-  try {
-    const raw = localStorage.getItem(REMINDER_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveReminders(list) {
-  try {
-    localStorage.setItem(REMINDER_STORAGE_KEY, JSON.stringify(list));
-  } catch {}
-}
-
 function computeNextFire(r) {
   if (r.mode === "once") {
     if (!r.date || !r.time) return null;
@@ -782,8 +779,20 @@ function formatWhen(r) {
   return `Every ${parts.join(" ") || "—"}`;
 }
 
+// Firestore timestamps come back as Timestamp objects (need .toMillis()),
+// but a reminder just added locally may still have a plain number/null from
+// the optimistic write — this normalizes either shape to a millis number.
+function toMillis(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return v;
+  if (typeof v.toMillis === "function") return v.toMillis();
+  return null;
+}
+
 function Reminder() {
-  const [reminders, setReminders] = useState(loadReminders);
+  const { user } = useAuth();
+  const [reminders, setReminders] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [notifPermission, setNotifPermission] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
@@ -791,8 +800,21 @@ function Reminder() {
   const emptyForm = { text: "", mode: "once", date: "", time: "", everyHrs: "", everyMin: "" };
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+  const firedRef = useRef(new Set()); // reminder ids already notified this session, avoids duplicate alerts
 
-  useEffect(() => saveReminders(reminders), [reminders]);
+  // ── Real-time reminders for this user, from Firestore ──────────────────────
+  useEffect(() => {
+    if (!user?.uid) return;
+    const q = query(collection(db, "reminders"), where("userId", "==", user.uid));
+    const unsub = onSnapshot(q, (snap) => {
+      const docs = snap.docs
+        .map((d) => ({ ...d.data(), id: d.id }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      setReminders(docs);
+      setLoading(false);
+    }, () => setLoading(false));
+    return unsub;
+  }, [user?.uid]);
 
   const requestPermission = () => {
     if (typeof Notification === "undefined") return;
@@ -800,7 +822,7 @@ function Reminder() {
   };
 
   const fireNotification = (r) => {
-    const title = "⏰ ASHA+ Reminder";
+    const title = "⏰ HealthGPT Reminder";
     const body = r.text;
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
       try {
@@ -823,39 +845,36 @@ function Reminder() {
     }
   };
 
+  // ── Local tick loop — checks fire times and calls the backend to persist
+  // done/lastFired so state survives a refresh or a different device. ───────
   useEffect(() => {
     const tick = () => {
       const now = Date.now();
-      setReminders((prev) => {
-        let changed = false;
-        const next = prev.map((r) => {
-          if (r.done || r.paused) return r;
-          const fireAt = computeNextFire(r);
-          if (fireAt !== null && fireAt <= now) {
-            fireNotification(r);
-            changed = true;
-            if (r.mode === "once") {
-              return { ...r, done: true, lastFired: now };
-            }
-            return { ...r, lastFired: now };
+      reminders.forEach((r) => {
+        if (r.done || r.paused || firedRef.current.has(`${r.id}-${r.lastFired}`)) return;
+        const fireAt = computeNextFire({ ...r, lastFired: toMillis(r.lastFired), createdAt: toMillis(r.createdAt) });
+        if (fireAt !== null && fireAt <= now) {
+          fireNotification(r);
+          firedRef.current.add(`${r.id}-${r.lastFired}`);
+          if (r.mode === "once") {
+            apiUpdateReminder(r.id, { done: true, lastFired: now }).catch(() => {});
+          } else {
+            apiUpdateReminder(r.id, { lastFired: now }).catch(() => {});
           }
-          return r;
-        });
-        return changed ? next : prev;
+        }
       });
     };
     const id = setInterval(tick, 15000);
     tick();
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reminders]);
 
   const resetForm = () => {
     setForm(emptyForm);
     setEditingId(null);
   };
 
-  const submitForm = (e) => {
+  const submitForm = async (e) => {
     e.preventDefault();
     if (!form.text.trim()) return;
     if (form.mode === "once" && (!form.date || !form.time)) {
@@ -867,19 +886,16 @@ function Reminder() {
       return;
     }
 
-    if (editingId) {
-      setReminders((prev) =>
-        prev.map((r) =>
-          r.id === editingId ? { ...r, ...form, done: false, lastFired: null } : r
-        )
-      );
-    } else {
-      setReminders((prev) => [
-        { id: Date.now(), ...form, createdAt: Date.now(), lastFired: null, done: false, paused: false },
-        ...prev,
-      ]);
+    try {
+      if (editingId) {
+        await apiUpdateReminder(editingId, { ...form, done: false, lastFired: null });
+      } else {
+        await apiAddReminder(form);
+      }
+      resetForm();
+    } catch (err) {
+      window.alert(err.message || "Couldn't save reminder. Please try again.");
     }
-    resetForm();
   };
 
   const startEdit = (r) => {
@@ -890,38 +906,36 @@ function Reminder() {
     });
   };
 
-  const removeReminder = (id) => {
+  const removeReminder = async (id) => {
     if (editingId === id) resetForm();
-    setReminders((prev) => prev.filter((r) => r.id !== id));
+    try {
+      await apiDeleteReminder(id);
+    } catch (err) {
+      window.alert(err.message || "Couldn't delete reminder.");
+    }
   };
 
-  const togglePause = (id) =>
-    setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, paused: !r.paused } : r)));
+  const togglePause = (id, current) =>
+    apiUpdateReminder(id, { paused: !current }).catch((err) => window.alert(err.message));
 
-  const snooze = (id, minutes) =>
-    setReminders((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? r.mode === "once"
-            ? {
-                ...r,
-                date: new Date(Date.now() + minutes * 60000).toISOString().slice(0, 10),
-                time: new Date(Date.now() + minutes * 60000).toTimeString().slice(0, 5),
-                done: false,
-              }
-            : {
-                ...r,
-                lastFired:
-                  Date.now() -
-                  (((Number(r.everyHrs) || 0) * 60 + (Number(r.everyMin) || 0)) * 60000) +
-                  minutes * 60000,
-              }
-          : r
-      )
-    );
+  const snooze = (id, r, minutes) => {
+    const updates = r.mode === "once"
+      ? {
+          date: new Date(Date.now() + minutes * 60000).toISOString().slice(0, 10),
+          time: new Date(Date.now() + minutes * 60000).toTimeString().slice(0, 5),
+          done: false,
+        }
+      : {
+          lastFired:
+            Date.now() -
+            (((Number(r.everyHrs) || 0) * 60 + (Number(r.everyMin) || 0)) * 60000) +
+            minutes * 60000,
+        };
+    apiUpdateReminder(id, updates).catch((err) => window.alert(err.message));
+  };
 
   const markDone = (id) =>
-    setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, done: true } : r)));
+    apiUpdateReminder(id, { done: true }).catch((err) => window.alert(err.message));
 
   const active = reminders.filter((r) => !r.done);
   const done = reminders.filter((r) => r.done);
@@ -933,7 +947,7 @@ function Reminder() {
           <div className="card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <div style={{ fontSize: 14 }}>
               🔔 Turn on notifications so reminders can alert you here — on this laptop or on your phone's
-              browser — even if the ASHA+ tab is in the background. (Your browser must have the tab open;
+              browser — even if the HealthGPT tab is in the background. (Your browser must have the tab open;
               fully closed-app push isn't wired up yet.)
             </div>
             <button className="btn btn-gold btn-sm" onClick={requestPermission}>Enable Notifications</button>
@@ -1032,7 +1046,9 @@ function Reminder() {
             </div>
           </form>
 
-          {active.length === 0 ? (
+          {loading ? (
+            <div style={{ color: "#6B7280", fontSize: 14 }}>Loading reminders…</div>
+          ) : active.length === 0 ? (
             <div style={{ color: "#6B7280", fontSize: 14 }}>No active reminders. Add one above.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: done.length ? 24 : 0 }}>
@@ -1053,8 +1069,8 @@ function Reminder() {
                     <div style={{ fontSize: 12, color: "#6B7280" }}>{formatWhen(r)}</div>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button className="btn btn-soft btn-sm" onClick={() => snooze(r.id, 10)}>😴 Snooze 10m</button>
-                    <button className="btn btn-soft btn-sm" onClick={() => togglePause(r.id)}>
+                    <button className="btn btn-soft btn-sm" onClick={() => snooze(r.id, r, 10)}>😴 Snooze 10m</button>
+                    <button className="btn btn-soft btn-sm" onClick={() => togglePause(r.id, r.paused)}>
                       {r.paused ? "▶️ Resume" : "⏸ Pause"}
                     </button>
                     <button className="btn btn-outline-purple btn-sm" onClick={() => startEdit(r)}>✏️ Edit</button>
@@ -1103,27 +1119,11 @@ function Reminder() {
 }
 
 // ─── Calendar Note ────────────────────────────────────────────────────────────
-const CALENDAR_NOTES_KEY = "ashaplus_calendar_notes_v1";
 const CAL_MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
 const CAL_WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-function loadCalendarNotes() {
-  try {
-    const raw = localStorage.getItem(CALENDAR_NOTES_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveCalendarNotes(map) {
-  try {
-    localStorage.setItem(CALENDAR_NOTES_KEY, JSON.stringify(map));
-  } catch {}
-}
 
 // Local yyyy-mm-dd key (avoids UTC off-by-one from toISOString)
 function dateKey(d) {
@@ -1134,15 +1134,33 @@ function dateKey(d) {
 }
 
 function CalendarNote() {
+  const { user } = useAuth();
   const today = new Date();
-  const [notesByDate, setNotesByDate] = useState(loadCalendarNotes);
+  // notesByDate: { [dateKey]: string[] } — built from Firestore docs, one
+  // doc per (user, date), doc id `${uid}_${date}`.
+  const [notesByDate, setNotesByDate] = useState({});
+  const [loading, setLoading] = useState(true);
   const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedKey, setSelectedKey] = useState(dateKey(today));
   const [draft, setDraft] = useState("");
   const [editingIdx, setEditingIdx] = useState(null);
   const [editDraft, setEditDraft] = useState("");
 
-  useEffect(() => saveCalendarNotes(notesByDate), [notesByDate]);
+  // ── Real-time calendar notes for this user, from Firestore ─────────────────
+  useEffect(() => {
+    if (!user?.uid) return;
+    const q = query(collection(db, "calendar_notes"), where("userId", "==", user.uid));
+    const unsub = onSnapshot(q, (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        if (data.date) map[data.date] = data.notes || [];
+      });
+      setNotesByDate(map);
+      setLoading(false);
+    }, () => setLoading(false));
+    return unsub;
+  }, [user?.uid]);
 
   const todayKey = dateKey(today);
   const selectedNotes = notesByDate[selectedKey] || [];
@@ -1157,15 +1175,16 @@ function CalendarNote() {
     setDraft("");
   };
 
-  const addNote = (e) => {
+  const addNote = async (e) => {
     e.preventDefault();
     const text = draft.trim();
     if (!text) return;
-    setNotesByDate((prev) => ({
-      ...prev,
-      [selectedKey]: [...(prev[selectedKey] || []), text],
-    }));
-    setDraft("");
+    try {
+      await apiAddCalendarNote(selectedKey, text);
+      setDraft("");
+    } catch (err) {
+      window.alert(err.message || "Couldn't save note. Please try again.");
+    }
   };
 
   const startEditNote = (idx) => {
@@ -1173,27 +1192,25 @@ function CalendarNote() {
     setEditDraft(selectedNotes[idx]);
   };
 
-  const saveEditNote = (idx) => {
+  const saveEditNote = async (idx) => {
     const text = editDraft.trim();
     if (!text) return;
-    setNotesByDate((prev) => {
-      const list = [...(prev[selectedKey] || [])];
-      list[idx] = text;
-      return { ...prev, [selectedKey]: list };
-    });
-    setEditingIdx(null);
-    setEditDraft("");
+    try {
+      await apiUpdateCalendarNote(selectedKey, idx, text);
+      setEditingIdx(null);
+      setEditDraft("");
+    } catch (err) {
+      window.alert(err.message || "Couldn't update note. Please try again.");
+    }
   };
 
-  const deleteNote = (idx) => {
-    setNotesByDate((prev) => {
-      const list = (prev[selectedKey] || []).filter((_, i) => i !== idx);
-      const next = { ...prev };
-      if (list.length) next[selectedKey] = list;
-      else delete next[selectedKey];
-      return next;
-    });
-    if (editingIdx === idx) { setEditingIdx(null); setEditDraft(""); }
+  const deleteNote = async (idx) => {
+    try {
+      await apiDeleteCalendarNote(selectedKey, idx);
+      if (editingIdx === idx) { setEditingIdx(null); setEditDraft(""); }
+    } catch (err) {
+      window.alert(err.message || "Couldn't delete note. Please try again.");
+    }
   };
 
   // ── Build calendar grid cells for the visible month ──
@@ -1218,6 +1235,9 @@ function CalendarNote() {
           <span className="badge badge-purple">{Object.keys(notesByDate).length} dates with notes</span>
         </div>
         <div className="card-body">
+          {loading ? (
+            <div style={{ color: "#6B7280", fontSize: 14 }}>Loading calendar notes…</div>
+          ) : (
           <div className="calnote-layout">
             {/* ── Calendar grid ── */}
             <div className="calnote-calendar">
@@ -1298,14 +1318,14 @@ function CalendarNote() {
                           />
                           <div className="calnote-item-actions">
                             <button className="btn btn-outline-purple btn-sm" onClick={() => saveEditNote(idx)}>💾 Save</button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => setEditingIdx(null)}>Cancel</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => { setEditingIdx(null); setEditDraft(""); }}>Cancel</button>
                           </div>
                         </>
                       ) : (
                         <>
                           <span className="calnote-item-text">{note}</span>
                           <div className="calnote-item-actions">
-                            <button className="btn btn-soft btn-sm" onClick={() => startEditNote(idx)}>✏️ Edit</button>
+                            <button className="btn btn-outline-purple btn-sm" onClick={() => startEditNote(idx)}>✏️</button>
                             <button className="btn btn-danger btn-sm" onClick={() => deleteNote(idx)}>🗑</button>
                           </div>
                         </>
@@ -1316,6 +1336,7 @@ function CalendarNote() {
               )}
             </div>
           </div>
+          )}
         </div>
       </div>
     </div>

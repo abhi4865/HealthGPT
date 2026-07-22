@@ -1,0 +1,78 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ──────────────────────────────────────────────────────
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function getRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && getRole() == 'super_admin';
+    }
+
+    // ── Users collection ──────────────────────────────────────────────────────
+    // Only two roles in this app: "super_admin" and "user".
+
+    match /users/{userId} {
+      allow read:   if isOwner(userId) || isSuperAdmin();
+      allow create: if isSignedIn();
+      allow update: if isOwner(userId) || isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // ── AI Response Cache collection ──────────────────────────────────────────
+    // Writes are done exclusively by the backend via Admin SDK — deny here.
+    // (Not currently read directly by the frontend, but kept readable in case
+    // you add a "recently asked" feature later.)
+
+    match /cached_responses/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if false;
+    }
+
+    // ── Government Schemes collection ─────────────────────────────────────────
+
+    match /govt_schemes/{schemeId} {
+      // Everyone signed in can read schemes
+      allow read:   if isSignedIn();
+      // Only super_admin can manage schemes (writes also verified server-side)
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // ── Reminders collection ──────────────────────────────────────────────────
+    // Each doc has a "userId" field. Users read/manage only their own;
+    // super_admin can read/manage all. Writes are also verified server-side
+    // by the backend (ownership check), these rules are the client-read gate.
+
+    match /reminders/{reminderId} {
+      allow read:   if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+    }
+
+    // ── Calendar Notes collection ─────────────────────────────────────────────
+    // One doc per (user, date), doc id is `${uid}_${date}`, has a "userId" field.
+
+    match /calendar_notes/{noteId} {
+      allow read:   if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+    }
+
+  }
+}
