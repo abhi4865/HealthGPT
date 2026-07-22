@@ -345,9 +345,10 @@ function ClipboardLogoIcon({ size = 20, style }) {
 }
 
 const ADMIN_NAV = [
-  { key: "reminder",  icon: "⏰", label: "Reminder" },
   { key: "chatbot",   icon: "🤖", label: "AI Assistant" },
   { key: "medical",   icon: <ClipboardLogoIcon />, label: "Medical Analysis" },
+  { key: "reminder",  icon: "⏰", label: "Reminder" },
+  { key: "calendar",  icon: "🗓️", label: "Calendar Note" },
   { key: "schemes",   icon: "🏛️", label: "Govt Schemes" },
 ];
 
@@ -1095,6 +1096,226 @@ function Reminder() {
               </div>
             </details>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Calendar Note ────────────────────────────────────────────────────────────
+const CALENDAR_NOTES_KEY = "ashaplus_calendar_notes_v1";
+const CAL_MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+const CAL_WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+function loadCalendarNotes() {
+  try {
+    const raw = localStorage.getItem(CALENDAR_NOTES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCalendarNotes(map) {
+  try {
+    localStorage.setItem(CALENDAR_NOTES_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+// Local yyyy-mm-dd key (avoids UTC off-by-one from toISOString)
+function dateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function CalendarNote() {
+  const today = new Date();
+  const [notesByDate, setNotesByDate] = useState(loadCalendarNotes);
+  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedKey, setSelectedKey] = useState(dateKey(today));
+  const [draft, setDraft] = useState("");
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editDraft, setEditDraft] = useState("");
+
+  useEffect(() => saveCalendarNotes(notesByDate), [notesByDate]);
+
+  const todayKey = dateKey(today);
+  const selectedNotes = notesByDate[selectedKey] || [];
+
+  const goToMonth = (delta) => {
+    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
+  };
+
+  const selectDate = (d) => {
+    setSelectedKey(dateKey(d));
+    setEditingIdx(null);
+    setDraft("");
+  };
+
+  const addNote = (e) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text) return;
+    setNotesByDate((prev) => ({
+      ...prev,
+      [selectedKey]: [...(prev[selectedKey] || []), text],
+    }));
+    setDraft("");
+  };
+
+  const startEditNote = (idx) => {
+    setEditingIdx(idx);
+    setEditDraft(selectedNotes[idx]);
+  };
+
+  const saveEditNote = (idx) => {
+    const text = editDraft.trim();
+    if (!text) return;
+    setNotesByDate((prev) => {
+      const list = [...(prev[selectedKey] || [])];
+      list[idx] = text;
+      return { ...prev, [selectedKey]: list };
+    });
+    setEditingIdx(null);
+    setEditDraft("");
+  };
+
+  const deleteNote = (idx) => {
+    setNotesByDate((prev) => {
+      const list = (prev[selectedKey] || []).filter((_, i) => i !== idx);
+      const next = { ...prev };
+      if (list.length) next[selectedKey] = list;
+      else delete next[selectedKey];
+      return next;
+    });
+    if (editingIdx === idx) { setEditingIdx(null); setEditDraft(""); }
+  };
+
+  // ── Build calendar grid cells for the visible month ──
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const firstDayIdx = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDayIdx; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+
+  const selectedLabel = (() => {
+    const [y, m, d] = selectedKey.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  })();
+
+  return (
+    <div className="page-body">
+      <div className="card card-ai" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <div className="card-title">🗓️ Calendar Note</div>
+          <span className="badge badge-purple">{Object.keys(notesByDate).length} dates with notes</span>
+        </div>
+        <div className="card-body">
+          <div className="calnote-layout">
+            {/* ── Calendar grid ── */}
+            <div className="calnote-calendar">
+              <div className="calnote-cal-header">
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => goToMonth(-1)}>‹</button>
+                <div className="calnote-cal-title">{CAL_MONTH_NAMES[month]} {year}</div>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => goToMonth(1)}>›</button>
+              </div>
+
+              <div className="calnote-grid calnote-weekdays">
+                {CAL_WEEKDAYS.map((w) => (
+                  <div key={w} className="calnote-weekday">{w}</div>
+                ))}
+              </div>
+
+              <div className="calnote-grid">
+                {cells.map((d, i) => {
+                  if (!d) return <div key={`blank-${i}`} className="calnote-cell calnote-cell-empty" />;
+                  const k = dateKey(d);
+                  const hasNotes = !!notesByDate[k]?.length;
+                  const isToday = k === todayKey;
+                  const isSelected = k === selectedKey;
+                  return (
+                    <button
+                      type="button"
+                      key={k}
+                      className={`calnote-cell ${isToday ? "calnote-cell-today" : ""} ${isSelected ? "calnote-cell-selected" : ""} ${hasNotes ? "calnote-cell-has-notes" : ""}`}
+                      onClick={() => selectDate(d)}
+                      title={hasNotes ? `${notesByDate[k].length} note(s)` : ""}
+                    >
+                      <span>{d.getDate()}</span>
+                      {hasNotes && <span className="calnote-dot" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="calnote-legend">
+                <span><i className="calnote-legend-dot" /> Has notes</span>
+                <span><i className="calnote-legend-today" /> Today</span>
+                <span><i className="calnote-legend-selected" /> Selected</span>
+              </div>
+            </div>
+
+            {/* ── Notes panel for selected date ── */}
+            <div className="calnote-panel">
+              <div className="calnote-panel-title">{selectedLabel}</div>
+
+              <form onSubmit={addNote} className="calnote-add-form">
+                <input
+                  className="login-input"
+                  type="text"
+                  placeholder="Add a note point for this date…"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+                <button type="submit" className="btn btn-outline-purple btn-sm">➕ Add</button>
+              </form>
+
+              {selectedNotes.length === 0 ? (
+                <div style={{ color: "#6B7280", fontSize: 14, marginTop: 12 }}>
+                  No notes for this date yet.
+                </div>
+              ) : (
+                <ul className="calnote-list">
+                  {selectedNotes.map((note, idx) => (
+                    <li key={idx} className="calnote-item">
+                      {editingIdx === idx ? (
+                        <>
+                          <input
+                            className="login-input"
+                            style={{ flex: 1 }}
+                            type="text"
+                            value={editDraft}
+                            autoFocus
+                            onChange={(e) => setEditDraft(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && saveEditNote(idx)}
+                          />
+                          <div className="calnote-item-actions">
+                            <button className="btn btn-outline-purple btn-sm" onClick={() => saveEditNote(idx)}>💾 Save</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => setEditingIdx(null)}>Cancel</button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <span className="calnote-item-text">{note}</span>
+                          <div className="calnote-item-actions">
+                            <button className="btn btn-soft btn-sm" onClick={() => startEditNote(idx)}>✏️ Edit</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => deleteNote(idx)}>🗑</button>
+                          </div>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -4359,6 +4580,7 @@ function ManageAsha({ ashaWorkers, setAshaWorkers, patients, toast, onBack, canE
 // ─── Page Title Map ───────────────────────────────────────────────────────────
 const PAGE_TITLES = {
   reminder:  "Reminder",
+  calendar:  "Calendar Note",
   chatbot:   "AI Assistant",
   medical:   "Medical Analysis",
   profile:   "My Profile",
@@ -4526,6 +4748,7 @@ export default function App() {
 
     if (isStaff) {
       if (page === "reminder") return <Reminder />;
+      if (page === "calendar") return <CalendarNote />;
       if (page === "manage-admin" && user.role !== "asha") return (
         <ManageAdminProfile
           adminProfile={user}

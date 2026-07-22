@@ -2232,3 +2232,183 @@ body {
 .text-muted    { color: var(--text-muted); }
 .truncate      { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .w-full        { width: 100%; }
+/* ============================================
+   CALENDAR NOTE
+   ============================================ */
+.calnote-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .calnote-layout { grid-template-columns: 1fr; }
+}
+
+.calnote-calendar {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: var(--white);
+}
+
+.calnote-cal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.calnote-cal-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text-dark);
+}
+
+.calnote-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.calnote-weekdays { margin-bottom: 4px; }
+
+.calnote-weekday {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+.calnote-cell {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dark);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.calnote-cell-empty { cursor: default; }
+
+.calnote-cell:not(.calnote-cell-empty):hover {
+  background: var(--purple-bg);
+  border-color: var(--purple-light);
+}
+
+.calnote-cell-today {
+  border-color: var(--gold-primary);
+  font-weight: 700;
+  color: var(--gold-dark);
+}
+
+.calnote-cell-has-notes {
+  background: var(--purple-soft);
+  font-weight: 700;
+  color: var(--purple-deep);
+}
+
+.calnote-cell-selected {
+  background: var(--purple-primary) !important;
+  border-color: var(--purple-primary) !important;
+  color: var(--white) !important;
+}
+
+.calnote-dot {
+  position: absolute;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--gold-primary);
+}
+
+.calnote-cell-selected .calnote-dot { background: var(--white); }
+
+.calnote-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.calnote-legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+.calnote-legend-dot,
+.calnote-legend-today,
+.calnote-legend-selected {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.calnote-legend-dot { background: var(--purple-soft); border: 1px solid var(--purple-light); }
+.calnote-legend-today { background: var(--white); border: 2px solid var(--gold-primary); }
+.calnote-legend-selected { background: var(--purple-primary); }
+
+.calnote-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  background: var(--off-white);
+  min-height: 260px;
+}
+
+.calnote-panel-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--purple-deep);
+  margin-bottom: 14px;
+}
+
+.calnote-add-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.calnote-add-form .login-input { flex: 1; }
+
+.calnote-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.calnote-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+
+.calnote-item-text {
+  font-size: 14px;
+  color: var(--text-dark);
+  word-break: break-word;
+  flex: 1;
+}
+
+.calnote-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
