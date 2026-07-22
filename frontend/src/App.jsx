@@ -4611,16 +4611,28 @@ export default function App() {
 
   // ── Restore session on page refresh ────────────────────────────────────────
   useEffect(() => {
+    // Safety net: never let the app get stuck on the loading screen if
+    // Firebase Auth/Firestore is slow or unreachable (e.g. flaky local
+    // network). If nothing has resolved auth within 8s, stop waiting and
+    // fall through to the login screen.
+    const safetyTimer = setTimeout(() => setAuthLoading(false), 8000);
+
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         // A manual login (handleSubmit) is in progress — it will call onLogin
         // itself after the role check. Don't touch user state here.
         if (isManualLoginRef.current) {
+          clearTimeout(safetyTimer);
           setAuthLoading(false);
           return;
         }
         try {
-          await firebaseUser.getIdToken(true); // refresh so role claim is present
+          // NOTE: no forced getIdToken(true) refresh here — that adds an
+          // extra network round trip on every page load for no benefit,
+          // since the cached token is valid almost all the time and
+          // Firestore/Auth will transparently refresh it if it's actually
+          // expired. Only force-refresh right after an admin changes a
+          // user's role, where the new custom claim is needed immediately.
           const snap = await getDoc(doc(db, "users", firebaseUser.uid));
           if (snap.exists()) {
             const profile = snap.data();
@@ -4631,9 +4643,13 @@ export default function App() {
           console.error("Session restore failed:", err);
         }
       }
+      clearTimeout(safetyTimer);
       setAuthLoading(false);
     });
-    return unsub;
+    return () => {
+      clearTimeout(safetyTimer);
+      unsub();
+    };
   }, []);
 
   // ── Real-time patients from Firestore ───────────────────────────────────────
