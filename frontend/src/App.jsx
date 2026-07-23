@@ -222,7 +222,7 @@ function AuthPage({ onLogin, onLoginStart, onLoginEnd }) {
         <div className="login-form-panel">
           {/* Brand */}
           <div className="login-brand">
-            <div className="login-brand-title">Healio<span className="brand-plus"><BrandPlus size="0.68em" /></span></div>
+            <div className="login-brand-title">Healio<span>+</span></div>
             <div className="login-tagline">AI-powered Healthcare Companion</div>
           </div>
 
@@ -407,7 +407,7 @@ function Sidebar({ user, active, onNav, mobileOpen, onOverlayClick, collapsed, o
         <div className="sidebar-brand">
           {!collapsed && (
             <div className="brand-card" onClick={() => onNav(nav[0].key)}>
-              <div className="brand-title">Healio<span className="brand-plus"><BrandPlus /></span></div>
+              <div className="brand-title">Healio<span>+</span></div>
             </div>
           )}
           {/* Hamburger / collapse button */}
