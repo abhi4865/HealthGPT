@@ -8,7 +8,7 @@
 import { auth } from "./firebaseConfig";
 
 const BASE_URL =
-  import.meta.env.VITE_API_URL || "https://your-new-backend.vercel.app";
+  import.meta.env.VITE_API_URL || "https://healio-plus.vercel.app";
 
 // ── Core fetch helper — attaches Firebase ID token automatically ─────────────
 async function apiFetch(endpoint, body) {
