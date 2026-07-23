@@ -39,6 +39,23 @@ import {
 import "./App.css";
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
+// Chunky rounded plus icon — mirrors the "+" mark in the Healio+ logo.
+// Uses currentColor so wrapping it in a colored element (e.g. gold) is enough.
+function BrandPlus({ size = "0.72em" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      style={{ display: "inline-block", verticalAlign: "middle", marginLeft: "0.06em", marginBottom: "0.05em" }}
+      aria-hidden="true"
+    >
+      <rect x="9" y="1.5" width="6" height="21" rx="3" fill="currentColor" />
+      <rect x="1.5" y="9" width="21" height="6" rx="3" fill="currentColor" />
+    </svg>
+  );
+}
+
 const AuthContext = createContext(null);
 const useAuth = () => useContext(AuthContext);
 
@@ -205,7 +222,8 @@ function AuthPage({ onLogin, onLoginStart, onLoginEnd }) {
         <div className="login-form-panel">
           {/* Brand */}
           <div className="login-brand">
-            <div className="login-brand-title">HealthGPT</div>
+            <div className="login-brand-title">Healio<span className="brand-plus"><BrandPlus size="0.68em" /></span></div>
+            <div className="login-tagline">AI-powered Healthcare Companion</div>
           </div>
 
           <div className="login-subtitle">
@@ -389,7 +407,7 @@ function Sidebar({ user, active, onNav, mobileOpen, onOverlayClick, collapsed, o
         <div className="sidebar-brand">
           {!collapsed && (
             <div className="brand-card" onClick={() => onNav(nav[0].key)}>
-              <div className="brand-title">HealthGPT</div>
+              <div className="brand-title">Healio<span className="brand-plus"><BrandPlus /></span></div>
             </div>
           )}
           {/* Hamburger / collapse button */}
@@ -480,7 +498,7 @@ function TopBar({ user, pageTitle, onLogout, onMenuToggle, onNav }) {
         <button className="sidebar-toggle" onClick={onMenuToggle}>☰</button>
         <div>
           <div className="topbar-title">{pageTitle}</div>
-          <div className="topbar-breadcrumb">HealthGPT › {pageTitle}</div>
+          <div className="topbar-breadcrumb">Healio+ › {pageTitle}</div>
         </div>
       </div>
       <div className="topbar-right">
@@ -822,7 +840,7 @@ function Reminder() {
   };
 
   const fireNotification = (r) => {
-    const title = "⏰ HealthGPT Reminder";
+    const title = "⏰ Healio+ Reminder";
     const body = r.text;
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
       try {
@@ -947,7 +965,7 @@ function Reminder() {
           <div className="card-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <div style={{ fontSize: 14 }}>
               🔔 Turn on notifications so reminders can alert you here — on this laptop or on your phone's
-              browser — even if the HealthGPT tab is in the background. (Your browser must have the tab open;
+              browser — even if the Healio+ tab is in the background. (Your browser must have the tab open;
               fully closed-app push isn't wired up yet.)
             </div>
             <button className="btn btn-gold btn-sm" onClick={requestPermission}>Enable Notifications</button>
@@ -1762,10 +1780,10 @@ function formatBotMessage(text) {
 
 // ─── AI Chatbot ───────────────────────────────────────────────────────────────
 const BOT_GREET =
-  "नमस्ते! 🙏 I'm HealthGPT, your health assistant. Ask me about symptoms, medicines, or general health tips!";
+  "नमस्ते! 🙏 I'm Healio+, your health assistant. Ask me about symptoms, medicines, or general health tips!";
 
 // Builds a printable PDF from the chat history — each patient question
-// paired with HealthGPT's full instructions/medicine/caution response.
+// paired with Healio+'s full instructions/medicine/caution response.
 //
 // IMPORTANT: this renders a hidden DOM node (using the same formatBotMessage
 // renderer as the on-screen chat) and converts THAT to a PDF via html2pdf.js
@@ -1789,7 +1807,7 @@ function downloadChatAsPdf(messages, containerEl) {
   return html2pdf()
     .set({
       margin: [32, 28, 32, 28],
-      filename: `HealthGPT-Health-Advice-${Date.now()}.pdf`,
+      filename: `Healio-Health-Advice-${Date.now()}.pdf`,
       image: { type: "jpeg", quality: 0.98 },
       html2canvas: {
         scale: 2,
@@ -1854,7 +1872,7 @@ function ChatBot() {
         (err) => {
           // If even the unordered query fails it is a rules problem.
           // Log it so the developer can see the real error in the console.
-          console.error("[HealthGPT] cached_responses read failed:", err.code, err.message);
+          console.error("[Healio+] cached_responses read failed:", err.code, err.message);
         }
       );
     };
@@ -1878,7 +1896,7 @@ function ChatBot() {
           // "permission-denied"   = Firestore rules not yet deployed.
           // Either way, fall back to unordered so recent questions still appear.
           console.warn(
-            "[HealthGPT] Ordered cache query failed (" + err.code + ") — falling back to unordered."
+            "[Healio+] Ordered cache query failed (" + err.code + ") — falling back to unordered."
           );
           attachUnordered();
         }
@@ -1974,7 +1992,7 @@ function ChatBot() {
           }}
         >
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>
-            HealthGPT — Health Advice Summary
+            Healio+ — Health Advice Summary
           </div>
           <div style={{ fontSize: 11, color: "#6B7280", marginBottom: 18 }}>
             Generated on {new Date().toLocaleString()}
@@ -2025,7 +2043,7 @@ function ChatBot() {
               }
             }}
             disabled={!messages.some((m) => m.from === "user") || pdfGenerating}
-            title="Download your questions and HealthGPT's advice as a PDF — handy to carry to the pharmacy"
+            title="Download your questions and Healio+'s advice as a PDF — handy to carry to the pharmacy"
             style={{
               display: "flex", alignItems: "center", gap: 6,
               opacity: messages.some((m) => m.from === "user") ? 1 : 0.5,
@@ -2039,7 +2057,7 @@ function ChatBot() {
             <div className="chatbot-header">
               <div className="chatbot-avatar">🩺</div>
               <div>
-                <div className="chatbot-name">HealthGPT</div>
+                <div className="chatbot-name">Healio+</div>
                 <div className="chatbot-status">
                   <span style={{
                     width: 7, height: 7, borderRadius: "50%",
@@ -4756,7 +4774,7 @@ export default function App() {
         height: "100vh", background: "var(--bg, #0f0f1a)", color: "#a78bfa",
         fontSize: "1.1rem", fontFamily: "sans-serif",
       }}>
-        Loading HealthGPT…
+        Loading Healio+…
       </div>
     );
   }
@@ -4847,7 +4865,7 @@ export default function App() {
         <div className={`main-content${collapsed ? " sidebar-collapsed-content" : ""}`}>
           <TopBar
             user={user}
-            pageTitle={PAGE_TITLES[page] || "HealthGPT"}
+            pageTitle={PAGE_TITLES[page] || "Healio+"}
             onLogout={logout}
             onMenuToggle={() => setMobile((p) => !p)}
             onNav={handleNav}

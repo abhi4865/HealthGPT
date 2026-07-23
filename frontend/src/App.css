@@ -188,6 +188,7 @@ body {
 }
 
 .brand-title span { color: var(--gold-bright); }
+.brand-title .brand-plus { color: var(--gold-bright); }
 
 /* Sidebar Nav */
 .sidebar-nav {
@@ -1526,6 +1527,16 @@ body {
 }
 
 .login-brand-title span { color: var(--gold-bright); }
+.login-brand-title .brand-plus { color: var(--gold-bright); }
+
+.login-tagline {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.82);
+  letter-spacing: 0.3px;
+  margin-top: 8px;
+  text-align: center;
+}
 
 .login-subtitle {
   font-size: 14px;
